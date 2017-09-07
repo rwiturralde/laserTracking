@@ -11,7 +11,6 @@ import time
 class LaserTracker(object):
 
     def __init__(self):
-        print("test")
         return
 
     def detect(self, frame):
@@ -35,8 +34,7 @@ class LaserTracker(object):
         # construct a mask for the colors, then perform
         # a series of dilations and erosions to remove any small
         # blobs left in the mask
-        #frame_threshed = cv2.inRange(hsv_img, LASER_MIN, LASER_MAX)
-        red_mask = cv2.inRange(hsv_img, lower_red, upper_red)
+        #red_mask = cv2.inRange(hsv_img, lower_red, upper_red)
         green_mask = cv2.inRange(hsv_blurred, lower_green, upper_green)
         green_mask = cv2.erode(green_mask, None, iterations=2)
         green_mask = cv2.dilate(green_mask, None, iterations=2)
@@ -60,8 +58,11 @@ class LaserTracker(object):
             c = max(green_cnts, key=cv2.contourArea)
             ((x, y), radius) = cv2.minEnclosingCircle(c)
             M = cv2.moments(c)
-            green_center = (int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"]))
-
+            if "m00" in M and M["m00"] > 0:
+                green_center = (int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"]))
+            else:
+                green_center = (x,y)
+            
             # only proceed if the radius meets a minimum size
             if radius > 10:
                 # draw the circle and centroid on the frame,
@@ -77,7 +78,10 @@ class LaserTracker(object):
             c = max(blue_cnts, key=cv2.contourArea)
             ((x, y), radius) = cv2.minEnclosingCircle(c)
             M = cv2.moments(c)
-            blue_center = (int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"]))
+            if "m00" in M and M["m00"] > 0:
+                blue_center = (int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"]))
+            else:
+                blue_center = (x,y)
 
             # only proceed if the radius meets a minimum size
             if radius > 10:
@@ -88,27 +92,25 @@ class LaserTracker(object):
                 cv2.circle(frame, blue_center, 5, (0, 0, 255), -1)
 
         # Bitwise-AND mask and original image
-        #red_result = cv2.bitwise_and(frame,frame, mask= red_mask)
         #green_result = cv2.bitwise_and(frame,frame, mask= green_mask)
         #blue_result = cv2.bitwise_and(frame,frame, mask= blue_mask)
 
         cv2.imshow('frame',frame)
-        #cv2.imshow('red_mask', red_mask)
-        #cv2.imshow('red_result', red_result)
         cv2.imshow('green_mask', green_mask)
         cv2.imshow('blue_mask', blue_mask)
 
+        print("Green center:" + str(green_center))
+        print("Blue center:" + str(blue_center))
+        print("Diff:" + str(np.subtract(blue_center, green_center)))
         return 0, 0
 
     def run(self):
-        sys.stdout.write("Using OpenCV version: {0}\n".format(cv2.__version__))
-
-        # Set up the camer captures
         # initialize the camera and grab a reference to the raw camera capture
         camera = PiCamera()
         camera.resolution = (640, 480)
-        camera.framerate = 15
-        #time.sleep(.5)
+        camera.framerate = 35
+        # allow the camera to warmup
+        time.sleep(0.1)
         rawCapture = PiRGBArray(camera, size=(640, 480))
 
         # capture frames from the camera
@@ -127,9 +129,6 @@ class LaserTracker(object):
             # if the `q` key was pressed, break from the loop
             if key == ord("q"):
                     break
-
-            #(laserx, lasery) = self.detect(frame)
-            #sys.stdout.write("(" + str(laserx) + "," + str(lasery) + ")" + "\n")
             
         cv2.destroyAllWindows()
 
