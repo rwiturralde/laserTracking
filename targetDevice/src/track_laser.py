@@ -1,6 +1,7 @@
 #! /usr/bin/env python
 import argparse
-#from cv2 import cv
+import os, boto3
+from contextlib import closing
 import cv2
 import sys
 import numpy as np
@@ -11,7 +12,37 @@ import time
 class LaserTracker(object):
 
     def __init__(self):
+        self.command_interval = 2 #seconds
+        self.next_command_time = time.time() + self.command_interval
+        self.defaultRegion = 'us-east-1'
+        self.defaultUrl = 'https://polly.us-east-1.amazonaws.com'
         return
+
+    def connectToPolly(self, regionName=None, endpointUrl=None):
+        regionName = regionName if regionName is not None else self.defaultRegion
+        endpointUrl = endpointUrl if endpointUrl is not None else self.defaultUrl
+        print("Connecting to Polly in " + regionName + " at URL " + endpointUrl)
+        return boto3.client('polly', region_name=regionName, endpoint_url=endpointUrl)
+
+    def speak(self, polly, text, format='ogg_vorbis', voice='Joanna'):
+        now = time.time()
+        filename = text.replace(' ', '_') + '.ogg'
+        # look for cached result
+        if os.path.isfile(filename):
+            print("Previous audio file found: " + filename)
+            os.system('omxplayer ' + filename)
+        else:
+            # No cached result, so fetch from Polly
+            resp = polly.synthesize_speech(OutputFormat=format, Text=text, VoiceId=voice)
+            with closing(resp["AudioStream"]) as stream:
+                # mp3 files were playing the with end clipped via omxplayer.
+                soundfile = open(filename, 'wb')
+                soundfile.write(stream.read())
+                soundfile.close()
+                os.system('omxplayer ' + filename)
+
+        print("Spoke audio in " + str(time.time() - now) + " seconds")
+
 
     def detect(self, frame):
         blurred = cv2.GaussianBlur(frame, (11,11), 0)
@@ -96,41 +127,65 @@ class LaserTracker(object):
         #blue_result = cv2.bitwise_and(frame,frame, mask= blue_mask)
 
         cv2.imshow('frame',frame)
-        cv2.imshow('green_mask', green_mask)
-        cv2.imshow('blue_mask', blue_mask)
-
-        print("Green center:" + str(green_center))
-        print("Blue center:" + str(blue_center))
-        print("Diff:" + str(np.subtract(blue_center, green_center)))
-        return 0, 0
+        #cv2.imshow('green_mask', green_mask)
+        #cv2.imshow('blue_mask', blue_mask)
+        
+        diff = None
+        if green_center is not None and blue_center is not None:
+            diff = np.subtract(blue_center, green_center)
+        
+        return diff
+    
 
     def run(self):
+        #initialize polly connection
+        polly = self.connectToPolly()
         # initialize the camera and grab a reference to the raw camera capture
-        camera = PiCamera()
-        camera.resolution = (640, 480)
-        camera.framerate = 35
-        # allow the camera to warmup
-        time.sleep(0.1)
-        rawCapture = PiRGBArray(camera, size=(640, 480))
+        with PiCamera() as camera:
+            try:
+                camera.resolution = (640, 480)
+                camera.framerate = 35
+                # allow the camera to warmup
+                time.sleep(0.1)
+                rawCapture = PiRGBArray(camera, size=(640, 480))
 
-        # capture frames from the camera
-        for frame in camera.capture_continuous(rawCapture, format="bgr", use_video_port=True):
-            # grab the raw NumPy array representing the image, then initialize the timestamp
-            # and occupied/unoccupied text
-            image_array = frame.array
+                # capture frames from the camera
+                for frame in camera.capture_continuous(rawCapture, format="bgr", use_video_port=True):
+                    # grab the raw NumPy array representing the image, then initialize the timestamp
+                    # and occupied/unoccupied text
+                    image_array = frame.array
 
-            # show the frame
-            self.detect(image_array)
-     
-            # clear the stream in preparation for the next frame
-            rawCapture.truncate(0)
-            
-            key = cv2.waitKey(10) & 0xFF
-            # if the `q` key was pressed, break from the loop
-            if key == ord("q"):
-                    break
-            
-        cv2.destroyAllWindows()
+                    # show the frame
+                    location_difference = self.detect(image_array)
+                    
+                    # Speak commands every N seconds
+                    if time.time() > self.next_command_time:        
+                        if location_difference is not None:
+                            if abs(location_difference[0]) > abs(location_difference[1]):
+                                if location_difference[0] > 0:
+                                    print("MOVE BLUE LEFT")
+                                    self.speak(polly, "left")
+                                else:
+                                    print("MOVE BLUE RIGHT")
+                                    self.speak(polly, "right")
+                            else:
+                                if location_difference[1] > 0:
+                                    print("MOVE BLUE UP")
+                                    self.speak(polly, "up")
+                                else:
+                                    print("MOVE BLUE DOWN")
+                                    self.speak(polly, "down")
+                        self.next_command_time = time.time() + self.command_interval
+             
+                    # clear the stream in preparation for the next frame
+                    rawCapture.truncate(0)
+                    
+                    key = cv2.waitKey(10) & 0xFF
+                    # if the `q` key was pressed, break from the loop
+                    if key == ord("q"):
+                            break
+            finally:
+                cv2.destroyAllWindows()
 
 
 if __name__ == '__main__':
