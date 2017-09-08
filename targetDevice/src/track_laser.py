@@ -9,30 +9,42 @@ from picamera.array import PiRGBArray
 from picamera import PiCamera
 import time
 
+'''
+Uses a camera to track a laser pointer and instruct it, via dictation,
+to move toward a destination.
+'''
 class LaserTracker(object):
 
     def __init__(self):
+        # How often we'll dictate commands
         self.command_interval = 2 #seconds
-        self.next_command_time = time.time() + self.command_interval
         self.defaultRegion = 'us-east-1'
-        self.defaultUrl = 'https://polly.us-east-1.amazonaws.com'
+        self.defaultPollyEndpoint = 'https://polly.us-east-1.amazonaws.com'
         return
 
+    '''
+    Create a boto3 AWS Polly client
+    '''
     def connectToPolly(self, regionName=None, endpointUrl=None):
         regionName = regionName if regionName is not None else self.defaultRegion
-        endpointUrl = endpointUrl if endpointUrl is not None else self.defaultUrl
+        endpointUrl = endpointUrl if endpointUrl is not None else self.defaultPollyEndpoint
         print("Connecting to Polly in " + regionName + " at URL " + endpointUrl)
         return boto3.client('polly', region_name=regionName, endpoint_url=endpointUrl)
 
+    '''
+    Use a given AWS Polly boto3 client to dictate a string of text.
+    Can optionally specify the file format for the audio and the dictation voice
+    '''
     def speak(self, polly, text, format='ogg_vorbis', voice='Joanna'):
         now = time.time()
         filename = text.replace(' ', '_') + '.ogg'
         # look for cached result
         if os.path.isfile(filename):
-            print("Previous audio file found: " + filename)
+            print("Previous audio file found. Playing: " + filename)
             os.system('omxplayer ' + filename)
         else:
             # No cached result, so fetch from Polly
+            print("No previous result for audio filename: " + filename + ". Calling Polly...")
             resp = polly.synthesize_speech(OutputFormat=format, Text=text, VoiceId=voice)
             with closing(resp["AudioStream"]) as stream:
                 # mp3 files were playing the with end clipped via omxplayer.
@@ -45,20 +57,18 @@ class LaserTracker(object):
 
 
     def detect(self, frame):
+        # Blur to smooth edges of shapes
         blurred = cv2.GaussianBlur(frame, (11,11), 0)
-        hsv_img = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        # blur to smooth edges
+        #hsv_img = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         hsv_blurred = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
         # define the lower and upper boundaries
         # in the HSV color space
         #LASER_MIN = np.array([0, 0, 230])
         #LASER_MAX = np.array([8, 115, 255])
-        lower_red = np.array([0, 0, 10])
-        upper_red = np.array([10, 255, 255])
-        
+        #lower_red = np.array([0, 0, 10])
+        #upper_red = np.array([10, 255, 255])
         lower_green = np.array([29, 86, 6])
         upper_green = np.array([64, 255, 255])
-        
         lower_blue = np.array([110,50,50])
         upper_blue = np.array([130,255,255])
         
@@ -97,7 +107,6 @@ class LaserTracker(object):
             # only proceed if the radius meets a minimum size
             if radius > 10:
                 # draw the circle and centroid on the frame,
-                # then update the list of tracked points
                 cv2.circle(frame, (int(x), int(y)), int(radius),
                         (0, 255, 255), 2)
                 cv2.circle(frame, green_center, 5, (0, 0, 255), -1)
@@ -117,18 +126,11 @@ class LaserTracker(object):
             # only proceed if the radius meets a minimum size
             if radius > 10:
                 # draw the circle and centroid on the frame,
-                # then update the list of tracked points
                 cv2.circle(frame, (int(x), int(y)), int(radius),
                         (0, 255, 255), 2)
                 cv2.circle(frame, blue_center, 5, (0, 0, 255), -1)
 
-        # Bitwise-AND mask and original image
-        #green_result = cv2.bitwise_and(frame,frame, mask= green_mask)
-        #blue_result = cv2.bitwise_and(frame,frame, mask= blue_mask)
-
         cv2.imshow('frame',frame)
-        #cv2.imshow('green_mask', green_mask)
-        #cv2.imshow('blue_mask', blue_mask)
         
         diff = None
         if green_center is not None and blue_center is not None:
@@ -141,6 +143,7 @@ class LaserTracker(object):
         #initialize polly connection
         polly = self.connectToPolly()
         # initialize the camera and grab a reference to the raw camera capture
+        # with-block ensures camera.close() is called upon exit.
         with PiCamera() as camera:
             try:
                 camera.resolution = (640, 480)
@@ -148,40 +151,42 @@ class LaserTracker(object):
                 # allow the camera to warmup
                 time.sleep(0.1)
                 rawCapture = PiRGBArray(camera, size=(640, 480))
-
+                
+                # initialize the next time to dictate a command to now
+                next_command_time = time.time()
                 # capture frames from the camera
                 for frame in camera.capture_continuous(rawCapture, format="bgr", use_video_port=True):
-                    # grab the raw NumPy array representing the image, then initialize the timestamp
-                    # and occupied/unoccupied text
+                    # grab the raw NumPy array representing the image
                     image_array = frame.array
 
-                    # show the frame
+                    # show the frame, detect shapes, and calculate difference in locations
+                    # between laser and target.
                     location_difference = self.detect(image_array)
                     
                     # Speak commands every N seconds
-                    if time.time() > self.next_command_time:        
+                    if time.time() > next_command_time:        
                         if location_difference is not None:
+                            command = None
                             if abs(location_difference[0]) > abs(location_difference[1]):
                                 if location_difference[0] > 0:
-                                    print("MOVE BLUE LEFT")
-                                    self.speak(polly, "left")
+                                    command = "left"
                                 else:
-                                    print("MOVE BLUE RIGHT")
-                                    self.speak(polly, "right")
+                                    command = "right"
                             else:
                                 if location_difference[1] > 0:
-                                    print("MOVE BLUE UP")
-                                    self.speak(polly, "up")
+                                    command = "up"
                                 else:
-                                    print("MOVE BLUE DOWN")
-                                    self.speak(polly, "down")
-                        self.next_command_time = time.time() + self.command_interval
+                                    command = "down"
+                            
+                            print(command)
+                            self.speak(polly, command)
+                        next_command_time = time.time() + self.command_interval
              
                     # clear the stream in preparation for the next frame
                     rawCapture.truncate(0)
                     
                     key = cv2.waitKey(10) & 0xFF
-                    # if the `q` key was pressed, break from the loop
+                    # if the `q` key was pressed in a cv2 window, break from the loop
                     if key == ord("q"):
                             break
             finally:
