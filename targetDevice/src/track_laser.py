@@ -18,6 +18,7 @@ class LaserTracker(object):
     def __init__(self):
         # How often we'll dictate commands
         self.command_interval = 2 #seconds
+        self.hit_radius_px = 120 # pixles
         self.defaultRegion = 'us-east-1'
         self.defaultPollyEndpoint = 'https://polly.us-east-1.amazonaws.com'
         return
@@ -166,8 +167,11 @@ class LaserTracker(object):
                     # Speak commands every N seconds
                     if time.time() > next_command_time:        
                         if location_difference is not None:
+                            print("Location difference is " + str(location_difference))
                             command = None
-                            if abs(location_difference[0]) > abs(location_difference[1]):
+                            if abs(location_difference[0]) < self.hit_radius_px and abs(location_difference[1]) < self.hit_radius_px:
+                                command = "hit"                            
+                            elif abs(location_difference[0]) > abs(location_difference[1]):
                                 if location_difference[0] > 0:
                                     command = "left"
                                 else:
