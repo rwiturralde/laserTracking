@@ -17,7 +17,7 @@ class LaserTracker(object):
 
     def __init__(self):
         # How often we'll dictate commands
-        self.command_interval = 2 #seconds
+        self.command_interval = 5 #seconds
         self.hit_radius_px = 120 # pixles
         self.defaultRegion = 'us-east-1'
         self.defaultPollyEndpoint = 'https://polly.us-east-1.amazonaws.com'
