@@ -190,7 +190,7 @@ class LaserTracker(object):
                             print("Location difference is " + str(location_difference))
                             command = None
                             if abs(location_difference[0]) < self.hit_radius_px and abs(location_difference[1]) < self.hit_radius_px:
-                                command = "move hit"                            
+                                command = "You did it!"
                             elif abs(location_difference[0]) > abs(location_difference[1]):
                                 if location_difference[0] > 0:
                                     command = "move left"
