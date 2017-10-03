@@ -17,8 +17,8 @@ class LaserTracker(object):
 
     def __init__(self):
         # How often we'll dictate commands
-        self.command_interval = 5 #seconds
-        self.hit_radius_px = 120 # pixles
+        self.command_interval = 2 #seconds
+        self.hit_radius_px = 60 # pixles
         self.defaultRegion = 'us-east-1'
         self.defaultPollyEndpoint = 'https://polly.us-east-1.amazonaws.com'
         return
@@ -31,6 +31,14 @@ class LaserTracker(object):
         endpointUrl = endpointUrl if endpointUrl is not None else self.defaultPollyEndpoint
         print("Connecting to Polly in " + regionName + " at URL " + endpointUrl)
         return boto3.client('polly', region_name=regionName, endpoint_url=endpointUrl)
+    
+    '''
+    Create a boto3 AWS Lex client
+    '''
+    def connectToLex(self, regionName=None):
+        regionName = regionName if regionName is not None else self.defaultRegion
+        print("Connecting to LEX in " + regionName)
+        return boto3.client('lex-runtime', region_name=regionName)
 
     '''
     Use a given AWS Polly boto3 client to dictate a string of text.
@@ -56,6 +64,20 @@ class LaserTracker(object):
 
         print("Spoke audio in " + str(time.time() - now) + " seconds")
 
+    '''
+    '''
+    def send_to_lex(self, polly, lex, text='Hello world', botName='laser_tracker_test_rwi', botAlias='RWI', userId='targetingDefault', voice='Joanna', \
+                          lexContentType='audio/lpcm; sample-rate=8000; sample-size-bits=16; channel-count=1; is-big-endian=false'):
+        now = time.time()
+
+        print("Calling Polly...")
+        resp = polly.synthesize_speech(OutputFormat='pcm', SampleRate='8000', Text=text, VoiceId=voice)
+        print("Sending Polly response to Lex...")
+        with closing(resp["AudioStream"]) as stream:
+            lex.post_content(botName=botName, botAlias=botAlias, userId=userId, contentType=lexContentType, inputStream=stream.read())
+
+        print("Fetched audio and posted to Lex in " + str(time.time() - now) + " seconds")                          
+
 
     def detect(self, frame):
         # Blur to smooth edges of shapes
@@ -64,34 +86,29 @@ class LaserTracker(object):
         hsv_blurred = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
         # define the lower and upper boundaries
         # in the HSV color space
-        #LASER_MIN = np.array([0, 0, 230])
-        #LASER_MAX = np.array([8, 115, 255])
-        #lower_red = np.array([0, 0, 10])
-        #upper_red = np.array([10, 255, 255])
+        lower_red = np.array([0, 0, 10])
+        upper_red = np.array([10, 255, 255])
         lower_green = np.array([29, 86, 6])
         upper_green = np.array([64, 255, 255])
-        lower_blue = np.array([110,50,50])
-        upper_blue = np.array([130,255,255])
         
         # construct a mask for the colors, then perform
         # a series of dilations and erosions to remove any small
         # blobs left in the mask
-        #red_mask = cv2.inRange(hsv_img, lower_red, upper_red)
+        red_mask = cv2.inRange(hsv_blurred, lower_red, upper_red)
+        red_mask = cv2.erode(red_mask, None, iterations=2)
+        red_mask = cv2.dilate(red_mask, None, iterations=2)
         green_mask = cv2.inRange(hsv_blurred, lower_green, upper_green)
         green_mask = cv2.erode(green_mask, None, iterations=2)
         green_mask = cv2.dilate(green_mask, None, iterations=2)
-        blue_mask = cv2.inRange(hsv_blurred, lower_blue, upper_blue)
-        #blue_mask = cv2.erode(blue_mask, None, iterations=2)
-        #blue_mask = cv2.dilate(blue_mask, None, iterations=2)
 
         # find contours in the mask and initialize the current
         # (x, y) center of the ball
         green_cnts = cv2.findContours(green_mask.copy(), cv2.RETR_EXTERNAL,
             cv2.CHAIN_APPROX_SIMPLE)[-2]
-        blue_cnts = cv2.findContours(blue_mask.copy(), cv2.RETR_EXTERNAL,
+        red_cnts = cv2.findContours(red_mask.copy(), cv2.RETR_EXTERNAL,
             cv2.CHAIN_APPROX_SIMPLE)[-2]
         green_center = None
-        blue_center = None
+        red_center = None
 
         if len(green_cnts) > 0:
             # find the largest contour in the mask, then use
@@ -112,30 +129,30 @@ class LaserTracker(object):
                         (0, 255, 255), 2)
                 cv2.circle(frame, green_center, 5, (0, 0, 255), -1)
         
-        if len(blue_cnts) > 0:
+        if len(red_cnts) > 0:
             # find the largest contour in the mask, then use
             # it to compute the minimum enclosing circle and
             # centroid
-            c = max(blue_cnts, key=cv2.contourArea)
+            c = max(red_cnts, key=cv2.contourArea)
             ((x, y), radius) = cv2.minEnclosingCircle(c)
             M = cv2.moments(c)
             if "m00" in M and M["m00"] > 0:
-                blue_center = (int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"]))
+                red_center = (int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"]))
             else:
-                blue_center = (x,y)
+                red_center = (x,y)
 
             # only proceed if the radius meets a minimum size
             if radius > 10:
                 # draw the circle and centroid on the frame,
                 cv2.circle(frame, (int(x), int(y)), int(radius),
                         (0, 255, 255), 2)
-                cv2.circle(frame, blue_center, 5, (0, 0, 255), -1)
+                cv2.circle(frame, red_center, 5, (0, 0, 255), -1)
 
         cv2.imshow('frame',frame)
         
         diff = None
-        if green_center is not None and blue_center is not None:
-            diff = np.subtract(blue_center, green_center)
+        if green_center is not None and red_center is not None:
+            diff = np.subtract(red_center, green_center)
         
         return diff
     
@@ -143,12 +160,15 @@ class LaserTracker(object):
     def run(self):
         #initialize polly connection
         polly = self.connectToPolly()
+        lex = self.connectToLex()
         # initialize the camera and grab a reference to the raw camera capture
         # with-block ensures camera.close() is called upon exit.
         with PiCamera() as camera:
             try:
                 camera.resolution = (640, 480)
                 camera.framerate = 35
+                camera.hflip = True
+                camera.vflip = True
                 # allow the camera to warmup
                 time.sleep(0.1)
                 rawCapture = PiRGBArray(camera, size=(640, 480))
@@ -170,20 +190,21 @@ class LaserTracker(object):
                             print("Location difference is " + str(location_difference))
                             command = None
                             if abs(location_difference[0]) < self.hit_radius_px and abs(location_difference[1]) < self.hit_radius_px:
-                                command = "hit"                            
+                                command = "move hit"                            
                             elif abs(location_difference[0]) > abs(location_difference[1]):
                                 if location_difference[0] > 0:
-                                    command = "left"
+                                    command = "move left"
                                 else:
-                                    command = "right"
+                                    command = "move right"
                             else:
                                 if location_difference[1] > 0:
-                                    command = "up"
+                                    command = "move up"
                                 else:
-                                    command = "down"
+                                    command = "move down"
                             
                             print(command)
                             self.speak(polly, command)
+                            self.send_to_lex(polly=polly, lex=lex, text=command)
                         next_command_time = time.time() + self.command_interval
              
                     # clear the stream in preparation for the next frame
