@@ -97,7 +97,7 @@ def handler(event, context):
             if 'Direction' in slots and not slots['Direction'] is None:
                 cmd = slots['Direction']
             if 'Amount' in slots and not slots['Amount'] is None:
-                delta = slots['Amount']
+                delta = int(slots['Amount'])
     
         movement_client = MovementClient('lg_thing_0')
     
