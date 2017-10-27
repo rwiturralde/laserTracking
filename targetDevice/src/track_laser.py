@@ -8,6 +8,9 @@ import numpy as np
 from picamera.array import PiRGBArray
 from picamera import PiCamera
 import time
+import json
+import RPi.GPIO as gpio
+import random
 
 '''
 Uses a camera to track a laser pointer and instruct it, via dictation,
@@ -16,11 +19,18 @@ to move toward a destination.
 class LaserTracker(object):
 
     def __init__(self):
+        self.gpio_pins = [18, 23]
         # How often we'll dictate commands
         self.command_interval = 2 #seconds
-        self.hit_radius_px = 60 # pixles
+        self.hit_radius_px = 60 # pixels
         self.defaultRegion = 'us-east-1'
         self.defaultPollyEndpoint = 'https://polly.us-east-1.amazonaws.com'
+        gpio.setmode(gpio.BCM)
+        gpio.setwarnings(False)
+        
+        for pin in self.gpio_pins:
+            gpio.setup(pin, gpio.OUT)
+        
         return
 
     '''
@@ -46,37 +56,46 @@ class LaserTracker(object):
     '''
     def speak(self, polly, text, format='ogg_vorbis', voice='Joanna'):
         now = time.time()
-        filename = text.replace(' ', '_') + '.ogg'
+        filename = 'tmp.ogg'
+        #filename = text.replace(' ', '_') + '.ogg'
         # look for cached result
-        if os.path.isfile(filename):
-            print("Previous audio file found. Playing: " + filename)
-            os.system('omxplayer ' + filename)
-        else:
+        #if os.path.isfile(filename):
+        #    print("Previous audio file found. Playing: " + filename)
+        #    os.system('omxplayer ' + filename)
+        #else:
             # No cached result, so fetch from Polly
-            print("No previous result for audio filename: " + filename + ". Calling Polly...")
-            resp = polly.synthesize_speech(OutputFormat=format, Text=text, VoiceId=voice)
-            with closing(resp["AudioStream"]) as stream:
-                # mp3 files were playing the with end clipped via omxplayer.
-                soundfile = open(filename, 'wb')
-                soundfile.write(stream.read())
-                soundfile.close()
-                os.system('omxplayer ' + filename)
+        #print("No previous result for audio filename: " + filename + ". Calling Polly...")
+        resp = polly.synthesize_speech(OutputFormat=format, Text=text, VoiceId=voice)
+        with closing(resp["AudioStream"]) as stream:
+            # mp3 files were playing the with end clipped via omxplayer.
+            soundfile = open(filename, 'wb')
+            soundfile.write(stream.read())
+            soundfile.flush()
+            soundfile.close()
+            os.system('omxplayer ' + filename + ' > /dev/null')
 
         print("Spoke audio in " + str(time.time() - now) + " seconds")
 
     '''
     '''
-    def send_to_lex(self, polly, lex, text='Hello world', botName='laser_tracker_test_rwi', botAlias='RWI', userId='targetingDefault', voice='Joanna', \
-                          lexContentType='audio/lpcm; sample-rate=8000; sample-size-bits=16; channel-count=1; is-big-endian=false'):
-        now = time.time()
-
-        print("Calling Polly...")
-        resp = polly.synthesize_speech(OutputFormat='pcm', SampleRate='8000', Text=text, VoiceId=voice)
-        print("Sending Polly response to Lex...")
-        with closing(resp["AudioStream"]) as stream:
-            lex.post_content(botName=botName, botAlias=botAlias, userId=userId, contentType=lexContentType, inputStream=stream.read())
-
-        print("Fetched audio and posted to Lex in " + str(time.time() - now) + " seconds")                          
+    def send_to_lex(self, polly, lex, text='Hello world', botName='testing', botAlias='test_alias', userId='targetingDefault', voice='Joanna', \
+                          lexContentType='audio/x-l16; sample-rate=16000; channel-count=1'):
+        
+        lex_parsed = False
+        
+        while not lex_parsed:
+            start = time.time()
+            print("Calling Polly for command " + text)
+            resp = polly.synthesize_speech(OutputFormat='pcm', SampleRate='16000', Text=text, VoiceId=voice)
+            print("Sending Polly response to Lex for command " + text)
+            with closing(resp["AudioStream"]) as stream:
+                lex_resp = lex.post_content(botName=botName, botAlias=botAlias, userId=userId, contentType=lexContentType, inputStream=stream.read())
+                print("Fetched audio and posted to Lex in " + str(time.time() - start) + " seconds")
+                
+                if lex_resp['dialogState'] == 'ElicitIntent':
+                    print('Lex failed to parse command: ' + text + '. Retrying... \nResponse: ' + lex_resp)
+                else:
+                    lex_parsed = True
 
 
     def detect(self, frame):
@@ -86,10 +105,10 @@ class LaserTracker(object):
         hsv_blurred = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
         # define the lower and upper boundaries
         # in the HSV color space
-        lower_red = np.array([0, 0, 10])
-        upper_red = np.array([10, 255, 255])
-        lower_green = np.array([29, 86, 6])
-        upper_green = np.array([64, 255, 255])
+        lower_red = np.array([166, 31, 122])
+        upper_red = np.array([250, 150, 255])
+        lower_green = np.array([40, 15, 140])
+        upper_green = np.array([72, 255, 255])
         
         # construct a mask for the colors, then perform
         # a series of dilations and erosions to remove any small
@@ -155,26 +174,30 @@ class LaserTracker(object):
             diff = np.subtract(red_center, green_center)
         
         return diff
-    
 
     def run(self):
         #initialize polly connection
         polly = self.connectToPolly()
         lex = self.connectToLex()
+        
+        #turn on a random target light
+        self.lit_gpio_pin = random.choice(self.gpio_pins)
+        gpio.output(self.lit_gpio_pin, gpio.HIGH)
+        
         # initialize the camera and grab a reference to the raw camera capture
         # with-block ensures camera.close() is called upon exit.
-        with PiCamera() as camera:
+        with PiCamera(resolution = (640, 480),framerate = 15) as camera:
             try:
-                camera.resolution = (640, 480)
-                camera.framerate = 35
                 camera.hflip = True
                 camera.vflip = True
+
                 # allow the camera to warmup
                 time.sleep(0.1)
                 rawCapture = PiRGBArray(camera, size=(640, 480))
                 
                 # initialize the next time to dictate a command to now
                 next_command_time = time.time()
+                prev_loc_diff = [0,0]
                 # capture frames from the camera
                 for frame in camera.capture_continuous(rawCapture, format="bgr", use_video_port=True):
                     # grab the raw NumPy array representing the image
@@ -184,28 +207,54 @@ class LaserTracker(object):
                     # between laser and target.
                     location_difference = self.detect(image_array)
                     
-                    # Speak commands every N seconds
-                    if time.time() > next_command_time:        
-                        if location_difference is not None:
+                    if location_difference is not None:
+                        laser_moved = abs(location_difference[0] - prev_loc_diff[0]) > 15 \
+                           or abs(location_difference[1] - prev_loc_diff[1]) > 15
+                        
+                        # If the laser hasn't moved since our last command, give it time to do so
+                        if not laser_moved:
+                            print('laser hasn\'t moved enough to dictate a new command')
+                        # Speak commands every N seconds
+                        elif time.time() > next_command_time:
                             print("Location difference is " + str(location_difference))
                             command = None
                             if abs(location_difference[0]) < self.hit_radius_px and abs(location_difference[1]) < self.hit_radius_px:
-                                command = "You did it!"
+                                #command = "move reset"
+                                print("HIT TARGET!")
+                                new_led = random.choice(self.gpio_pins)
+                                while new_led == self.lit_gpio_pin:
+                                    new_led = random.choice(self.gpio_pins)
+                                gpio.output(self.lit_gpio_pin, gpio.LOW)
+                                gpio.output(new_led, gpio.HIGH)
+                                self.lit_gpio_pin = new_led
+                                rawCapture.truncate(0)
+                                continue
                             elif abs(location_difference[0]) > abs(location_difference[1]):
+                                # Seems to be ~7px per degree of movement of the pan-tilt
+                                units = int(abs(location_difference[0]) / 7)
+                                units = str(units)
                                 if location_difference[0] > 0:
+                                    #command = "move left " + units
                                     command = "move left"
                                 else:
+                                    #command = "move right " + units
                                     command = "move right"
                             else:
+                                # Seems to be ~7px per degree of movement of the pan-tilt
+                                units = int(abs(location_difference[1]) / 7)
+                                units = str(units)
                                 if location_difference[1] > 0:
+                                    #command = "move up " + units
                                     command = "move up"
                                 else:
+                                    #command = "move down " + units
                                     command = "move down"
                             
                             print(command)
                             self.speak(polly, command)
                             self.send_to_lex(polly=polly, lex=lex, text=command)
-                        next_command_time = time.time() + self.command_interval
+                            next_command_time = time.time() + self.command_interval
+                            prev_loc_diff = location_difference
              
                     # clear the stream in preparation for the next frame
                     rawCapture.truncate(0)
@@ -213,8 +262,10 @@ class LaserTracker(object):
                     key = cv2.waitKey(10) & 0xFF
                     # if the `q` key was pressed in a cv2 window, break from the loop
                     if key == ord("q"):
-                            break
+                        gpio.output(self.lit_gpio_pin, gpio.LOW)
+                        break
             finally:
+                gpio.output(self.lit_gpio_pin, gpio.LOW)
                 cv2.destroyAllWindows()
 
 
