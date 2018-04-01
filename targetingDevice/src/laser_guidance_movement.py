@@ -7,7 +7,7 @@ import logging
 import argparse
 import datetime
 import threading
-import pantilthat
+#import pantilthat
 from boto3.session import Session
 from botocore.exceptions import ClientError
 from random import choice
@@ -22,8 +22,8 @@ log.setLevel(logging.INFO)
 
 def move_guidance(xdelta, ydelta):
     log.info("Starting to move arm: {0}, {1}".format(xdelta, ydelta))
-    pantilthat.pan(xdelta)
-    pantilthat.tilt(ydelta)
+    #pantilthat.pan(xdelta)
+    #pantilthat.tilt(ydelta)
     log.info("Finished moving arm: {0}, {1}".format(xdelta, ydelta))
 
 

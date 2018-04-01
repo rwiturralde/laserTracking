@@ -86,35 +86,7 @@ class LaserTracker(object):
         
         while not lex_parsed:
             start = time.time()
-            #print("Calling Polly for command " + text)
-            
-            ####
-            filename = text.replace(' ', '_') + '.pcm'
-            # look for cached result
-            if os.path.isfile(filename):
-                print("Previous PCM audio file found. Sending to Lex: " + filename)
-            else:
-                # No cached result, so fetch from Polly
-                print("No previous result for PCM audio filename: " + filename + ". Calling Polly...")
-                resp = polly_client.synthesize_speech(OutputFormat='pcm', SampleRate='16000', Text=text, VoiceId=voice)
-                with closing(resp["AudioStream"]) as stream:
-                    # mp3 files were playing the with end clipped via omxplayer.
-                    soundfile = open(filename, 'wb')
-                    soundfile.write(stream.read())
-                    soundfile.flush()
-                    soundfile.close()
-                    
-            with closing(open(filename, 'r')) as stream:
-                lex_resp = lex_client.post_content(botName=botName, botAlias=botAlias, userId=userId, contentType=lexContentType, inputStream=stream.read())
-                print("Fetched audio and posted to Lex in " + str(time.time() - start) + " seconds")
-                
-                if lex_resp['dialogState'] == 'ElicitIntent':
-                    print('Lex failed to parse command: ' + text + '. Retrying... \nResponse: ' + lex_resp)
-                else:
-                    lex_parsed = True
-                    
-            ####
-            '''
+            print("Calling Polly for command " + text)
             resp = polly_client.synthesize_speech(OutputFormat='pcm', SampleRate='16000', Text=text, VoiceId=voice)
             print("Sending Polly response to Lex for command " + text)
             with closing(resp["AudioStream"]) as stream:
@@ -125,7 +97,6 @@ class LaserTracker(object):
                     print('Lex failed to parse command: ' + text + '. Retrying... \nResponse: ' + lex_resp)
                 else:
                     lex_parsed = True
-            '''
 
 
     def detect(self, frame):
